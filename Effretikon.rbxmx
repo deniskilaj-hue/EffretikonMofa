@@ -127,8 +127,10 @@ startPlatform.Parent = workspace
 local terrain = workspace.Terrain
 local RES = 4
 
+-- Schnell: nur die oberen ~32 Studs fuellen, Luft-Schichten via table.create
+-- statt einzeln, und pro Spalte nur die Schichten schreiben, die wirklich gefuellt werden.
 local function fillRect(xa, xb, za, zb)
-	local CH = 32
+	local CH = 64
 	local chunkCount = 0
 	local xs = xa
 	while xs < xb do
@@ -141,27 +143,30 @@ local function fillRect(xa, xb, za, zb)
 			local lo, hi = math.huge, -math.huge
 			for ix = 1, nx do
 				hts[ix] = {}
+				local wx = xs + (ix - 0.5) * RES
 				for iz = 1, nz do
-					local h = heightAt(xs + (ix - 0.5) * RES, zs + (iz - 0.5) * RES)
+					local h = heightAt(wx, zs + (iz - 0.5) * RES)
 					hts[ix][iz] = h
 					if h < lo then lo = h end
 					if h > hi then hi = h end
 				end
 			end
-			local y0 = math.floor((lo - 60) / RES) * RES -- weit nach unten, damit nirgends eine Kante sichtbar wird
+			local y0 = math.floor((lo - 32) / RES) * RES
 			local y1 = math.ceil(hi / RES) * RES + RES
 			local ny = (y1 - y0) / RES
 			local mats, occ = {}, {}
 			for ix = 1, nx do
 				mats[ix], occ[ix] = {}, {}
 				for iy = 1, ny do
-					mats[ix][iy], occ[ix][iy] = {}, {}
+					mats[ix][iy] = table.create(nz, Enum.Material.Air)
+					occ[ix][iy] = table.create(nz, 0)
 				end
 			end
 			for ix = 1, nx do
+				local wx = xs + (ix - 0.5) * RES
 				for iz = 1, nz do
 					local h = hts[ix][iz]
-					local wx, wz = xs + (ix - 0.5) * RES, zs + (iz - 0.5) * RES
+					local wz = zs + (iz - 0.5) * RES
 					local ci = math.clamp(math.floor((wx - GX0) / STEP + 0.5), 0, COLS - 1)
 					local cj = math.clamp(math.floor((wz - GZ0) / STEP + 0.5), 0, ROWS - 1)
 					local m = maskAt(ci, cj)
@@ -171,22 +176,21 @@ local function fillRect(xa, xb, za, zb)
 					elseif m == 2 then
 						mat = Enum.Material.Ground
 					end
-					for iy = 1, ny do
+					local iy0 = math.max(1, math.floor((h - 32 - y0) / RES) + 1)
+					local iy1 = math.min(ny, math.ceil((h - y0) / RES))
+					for iy = iy0, iy1 do
 						local yb = y0 + (iy - 1) * RES
 						local o = math.clamp((h - yb) / RES, 0, 1)
-						if o > 0 and yb >= h - 60 then
+						if o > 0 then
 							mats[ix][iy][iz] = mat
 							occ[ix][iy][iz] = o
-						else
-							mats[ix][iy][iz] = Enum.Material.Air
-							occ[ix][iy][iz] = 0
 						end
 					end
 				end
 			end
 			terrain:WriteVoxels(Region3.new(Vector3.new(xs, y0, zs), Vector3.new(xe, y1, ze)), RES, mats, occ)
 			chunkCount = chunkCount + 1
-			if chunkCount % 3 == 0 then
+			if chunkCount % 8 == 0 then
 				task.wait()
 			end
 			zs = ze
@@ -196,11 +200,6 @@ local function fillRect(xa, xb, za, zb)
 end
 
 print("[Effretikon] Gelaende wird gebaut ...")
-for _, r in ipairs(RECTS) do
-	fillRect(r[1], r[2], r[3], r[4])
-end
-print("[Effretikon] Gelaende fertig")
-startPlatform:Destroy()
 
 ---------------------------------------------------------------- Fensterbaender an grossen Haeusern
 do
@@ -673,6 +672,18 @@ local function buildMofa(cfg, position)
 	return model
 end
 
+-- Phase 1: Nur die Spawn-Gebiete fuellen, damit das Spiel in Sekunden spielbar ist
+local SPAWN_AREAS = {
+	{ 0, 20 },
+	{ 2800, 5290 },
+	{ -1000, 2000 },
+}
+for _, s in ipairs(SPAWN_AREAS) do
+	fillRect(s[1] - 260, s[1] + 260, s[2] - 260, s[2] + 260)
+end
+startPlatform:Destroy()
+print("[Effretikon] Spawn-Gebiete fertig - Toeffli spawnen jetzt moeglich")
+
 for i, cfg in ipairs(TYPES) do
 	local x, z = (i - 2) * 7, 26
 	buildMofa(cfg, Vector3.new(x, heightAt(x, z) + 0.5, z))
@@ -728,6 +739,12 @@ for _, q in ipairs(spawnQueue) do
 	spawnMofaFunc(q[1], q[2])
 end
 spawnQueue = nil
+
+-- Phase 2: Restliches Gelaende im Hintergrund (Spiel laeuft schon)
+for _, r in ipairs(RECTS) do
+	fillRect(r[1], r[2], r[3], r[4])
+end
+print("[Effretikon] Gelaende fertig")
 
 -- Startpunkt direkt neben den Mofas setzen (vorher stand er am Ursprung)
 local startSpawn = workspace:FindFirstChild("SpawnLocation", true)
